@@ -4,6 +4,8 @@
 #include <math.h>
 #include <vector>
 #include <istream>
+#include <algorithm>
+#include <chrono>
 
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
@@ -67,6 +69,9 @@
 //But we COULD limit our parallelism by only considering
 //a fixed number of previous states, K, before doing the reduction:
 //tmp arr size = V*S*K*sizeof(float)
+
+
+int const WARP_SIZE = 32; //Let's just assume this will always be true...
 
 float const COST_INFEASIBLE = 999999.9f;
 
@@ -154,7 +159,59 @@ __global__ void make_move(float * const tmp_arr,
 
 
 //reduction on tmp_arr to get minimum
+__global__ void best_cost_for_state(int s_idx_curr,
+                                    int v_idx_curr,
+                                    float const * const tmp_arr,
+                                    float * const c2g_arr,
+                                    move_options const * const move_opt) {
 
+    extern  __shared__  float temp[];
+
+    //reduction on ONE curr state (min over all prev states)
+    //tmp array (idx_prev,idx_nxt)
+    int idx_curr = s_idx_curr*move_opt->V_SZ + v_idx_curr;
+    int idx_prev = threadIdx.x + blockIdx.x*blockDim.x;
+    int idx      = idx_prev*(move_opt->S_SZ*move_opt->V_SZ) + idx_curr;
+
+
+    //tmp_arr must have idx_curr in a valid range that is a power of 2!!!
+    //pad with infeasible!!!
+
+    //warp_min will contain the min of all threads in this warp after suffle
+    float warp_min = COST_INFEASIBLE;
+    if(idx_prev < move_opt->V_SZ*move_opt->S_SZ) {
+        warp_min = tmp_arr[idx];
+    }
+
+    for(int mask = WARP_SIZE/2; mask>0; mask >>=1) {
+        //we get data from thread with lane_id = my_lane_id XOR laneMask
+        float shfl_data = __shfl_xor(warp_min,mask);
+        warp_min = fminf(warp_min,shfl_data);
+    }
+
+    //now all threads have the partial min of their warp
+    //let the first thread in the warp fill in the shared memory for the block
+    int warp_id = threadIdx.x / WARP_SIZE;
+    int lane_id = threadIdx.x % WARP_SIZE;
+    if(lane_id == 0) {
+        temp[warp_id] = warp_min;
+    }
+    __syncthreads();
+
+
+    if(warp_id == 0) {
+        float min = temp[lane_id];
+        for(int mask = WARP_SIZE/2; mask>0; mask >>=1) {
+            float shfl_data = __shfl_xor(min,mask);
+            min = fminf(min,shfl_data);
+        }
+        if(threadIdx.x == 0) {
+            //fill in output
+            c2g_arr[idx_curr] = min;
+        }
+    }
+
+}
 
 extern
 int simple_dp(std::vector<float> const & a_options,
@@ -205,18 +262,18 @@ int simple_dp(std::vector<float> const & a_options,
 
 
     //Struct on device...
-    move_options   host_opt_ptr;
+    move_options   host_opt;
     move_options * dev_opt_ptr;
     cudaMalloc((void**)&dev_opt_ptr,sizeof(move_options));
     //raw ptrs
-    host_opt_ptr.a_opt = dev_a_opt;//thrust::raw_pointer_cast(D_a_opt.data());
-    host_opt_ptr.v_opt = dev_v_opt;//thrust::raw_pointer_cast(D_v_opt.data());
-    host_opt_ptr.s_opt = dev_s_opt;//thrust::raw_pointer_cast(D_s_opt.data());
-    host_opt_ptr.A_SZ = a_options.size();
-    host_opt_ptr.S_SZ = s_options.size();
-    host_opt_ptr.V_SZ = v_options.size();
+    host_opt.a_opt = dev_a_opt;//thrust::raw_pointer_cast(D_a_opt.data());
+    host_opt.v_opt = dev_v_opt;//thrust::raw_pointer_cast(D_v_opt.data());
+    host_opt.s_opt = dev_s_opt;//thrust::raw_pointer_cast(D_s_opt.data());
+    host_opt.A_SZ = a_options.size();
+    host_opt.S_SZ = s_options.size();
+    host_opt.V_SZ = v_options.size();
     //copy data to host
-    checkCudaErrors( cudaMemcpy(dev_opt_ptr,&host_opt_ptr,sizeof(move_options),cudaMemcpyHostToDevice) );
+    checkCudaErrors( cudaMemcpy(dev_opt_ptr,&host_opt,sizeof(move_options),cudaMemcpyHostToDevice) );
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -246,14 +303,14 @@ int simple_dp(std::vector<float> const & a_options,
       int global_z = blockIdx.z*blockDim.z  + threadIdx.z
     */
 
-    std::cout << "S_SZ = " << host_opt_ptr.S_SZ << " V_SZ = " << host_opt_ptr.V_SZ << std::endl;
+    std::cout << "S_SZ = " << host_opt.S_SZ << " V_SZ = " << host_opt.V_SZ << std::endl;
 
     //three dimensional indexing...
     //   s_idx x  v_idx  x s_idx_prev
     //
     // Each block can have at most 1024 threads
 
-    if(host_opt_ptr.S_SZ > 1024 || host_opt_ptr.V_SZ > 1024 || host_opt_ptr.A_SZ > 1024) {
+    if(host_opt.S_SZ > 1024 || host_opt.V_SZ > 1024 || host_opt.A_SZ > 1024) {
         std::cerr << "Maximum dimensions exceeded" << std::endl;
         return -1;
     }
@@ -263,22 +320,22 @@ int simple_dp(std::vector<float> const & a_options,
     int block_d1_sz = std::min(host_opt_ptr.V_SZ,(int)ceil(1024.0/block_d0_sz));
     int block_d2_sz = std::min(host_opt_ptr.S_SZ,(int)ceil(1024.0/(block_d0_sz*block_d1_sz)));
     */
-    int block_d0_sz = host_opt_ptr.S_SZ;  //host_opt_ptr.S_SZ/2;
+    int block_d0_sz = host_opt.S_SZ;  //host_opt_ptr.S_SZ/2;
     int block_d1_sz = 1;                  //1024/block_d0_sz;
     int block_d2_sz = 1;
 
     std::cout << "block dims = " << block_d0_sz << " x " << block_d1_sz << " x " << block_d2_sz
               << " (total = " << block_d0_sz*block_d1_sz*block_d2_sz << ") " << std::endl;
 
-    int grid_d0_sz = ceil(1.0*host_opt_ptr.S_SZ/block_d0_sz);
-    int grid_d1_sz = ceil(1.0*host_opt_ptr.V_SZ/block_d1_sz);
-    int grid_d2_sz = ceil(1.0*host_opt_ptr.S_SZ/block_d2_sz);
+    int grid_d0_sz = ceil(1.0*host_opt.S_SZ/block_d0_sz);
+    int grid_d1_sz = ceil(1.0*host_opt.V_SZ/block_d1_sz);
+    int grid_d2_sz = ceil(1.0*host_opt.S_SZ/block_d2_sz);
 
     std::cout << "grid dims = " << grid_d0_sz << " x " << grid_d1_sz << " x " << grid_d2_sz
               << " total = " << grid_d0_sz*grid_d1_sz*grid_d2_sz << " x " << block_d0_sz*block_d1_sz*block_d2_sz
               << " = " << grid_d0_sz*grid_d1_sz*grid_d2_sz*block_d0_sz*block_d1_sz*block_d2_sz << std::endl;
-    std::cout << "for problem of dimensions = " << host_opt_ptr.S_SZ << " x " << host_opt_ptr.V_SZ << " x " << host_opt_ptr.S_SZ
-              << " = " << host_opt_ptr.S_SZ*host_opt_ptr.V_SZ*host_opt_ptr.S_SZ << std::endl;
+    std::cout << "for problem of dimensions = " << host_opt.S_SZ << " x " << host_opt.V_SZ << " x " << host_opt.S_SZ
+              << " = " << host_opt.S_SZ*host_opt.V_SZ*host_opt.S_SZ << std::endl;
 
     dim3 grid_dim(grid_d0_sz,grid_d1_sz,grid_d2_sz);
     dim3 block_dim(block_d0_sz,block_d1_sz,block_d2_sz);
@@ -339,22 +396,22 @@ int simple_dp(std::vector<float> const & a_options,
     delete[] host_tmp_arr;
     */
 
-    block_d0_sz = host_opt_ptr.S_SZ;  //host_opt_ptr.S_SZ/2;
+    block_d0_sz = host_opt.S_SZ;  //host_opt_ptr.S_SZ/2;
     block_d1_sz = 1;                  //1024/block_d0_sz;
     block_d2_sz = 1;
 
     std::cout << "block dims = " << block_d0_sz << " x " << block_d1_sz << " x " << block_d2_sz
               << " (total = " << block_d0_sz*block_d1_sz*block_d2_sz << ") " << std::endl;
 
-    grid_d0_sz = ceil(1.0*host_opt_ptr.S_SZ/block_d0_sz);
-    grid_d1_sz = ceil(1.0*host_opt_ptr.V_SZ/block_d1_sz);
-    grid_d2_sz = ceil(1.0*host_opt_ptr.A_SZ/block_d2_sz);
+    grid_d0_sz = ceil(1.0*host_opt.S_SZ/block_d0_sz);
+    grid_d1_sz = ceil(1.0*host_opt.V_SZ/block_d1_sz);
+    grid_d2_sz = ceil(1.0*host_opt.A_SZ/block_d2_sz);
 
     std::cout << "grid dims = " << grid_d0_sz << " x " << grid_d1_sz << " x " << grid_d2_sz
               << " total = " << grid_d0_sz*grid_d1_sz*grid_d2_sz << " x " << block_d0_sz*block_d1_sz*block_d2_sz
               << " = " << grid_d0_sz*grid_d1_sz*grid_d2_sz*block_d0_sz*block_d1_sz*block_d2_sz << std::endl;
-    std::cout << "for problem of dimensions = " << host_opt_ptr.S_SZ << " x " << host_opt_ptr.V_SZ << " x " << host_opt_ptr.A_SZ
-              << " = " << host_opt_ptr.S_SZ*host_opt_ptr.V_SZ*host_opt_ptr.A_SZ << std::endl;
+    std::cout << "for problem of dimensions = " << host_opt.S_SZ << " x " << host_opt.V_SZ << " x " << host_opt.A_SZ
+              << " = " << host_opt.S_SZ*host_opt.V_SZ*host_opt.A_SZ << std::endl;
 
     dim3 grid_dim_search(grid_d0_sz,grid_d1_sz,grid_d2_sz);
     dim3 block_dim_search(block_d0_sz,block_d1_sz,block_d2_sz);
@@ -370,6 +427,61 @@ int simple_dp(std::vector<float> const & a_options,
     cudaEventElapsedTime(&milli, start, stop);
     std::cout << "Make move in " << milli << " ms " << std::endl;
 
+
+    int shared_mem_size = sizeof(float) * WARP_SIZE;
+    int num_threads = 1024;
+    int num_blocks  = ceil( (host_opt.V_SZ*host_opt.S_SZ)/1024.0 );
+
+    std::cout << "num_t x num_blocks = " << num_threads << " x " << num_blocks << " = "
+              << num_threads*num_blocks << " for problem of size = " << host_opt.V_SZ*host_opt.S_SZ << std::endl;
+
+
+
+    /*
+    auto started = std::chrono::high_resolution_clock::now();
+
+    std::vector<float> runtimes;
+    for(int s_idx_curr=0; s_idx_curr<host_opt.S_SZ; ++s_idx_curr) {
+        for(int v_idx_curr=0; v_idx_curr<host_opt.V_SZ; ++v_idx_curr) {
+            cudaEventRecord(start);
+            best_cost_for_state<<<num_blocks,num_threads,shared_mem_size>>>(s_idx_curr,v_idx_curr,
+                                                                            dev_tmp_arr,dev_c2g,dev_opt_ptr);
+            getLastCudaError("best_cost_for_state execution failed\n");
+            cudaEventRecord(stop);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&milli, start, stop);
+            runtimes.push_back(milli);
+        }
+    }
+    //Max runtime
+    std::cout << "max runtime = " << *std::max_element(runtimes.begin(),runtimes.end()) << " ms " << std::endl;
+    //Total
+    std::cout << "Total runtime = " <<  std::accumulate(runtimes.begin(), runtimes.end(), 0.0) << " ms " << std::endl;
+
+    auto done = std::chrono::high_resolution_clock::now();
+    std::cout << "Total time for loops... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+    */
+    //about 458 ms....
+
+    auto started = std::chrono::high_resolution_clock::now();
+    //Let's create a bunch of streams....
+    std::vector<cudaStream_t> streams(100);
+    for(auto & stream : streams) {
+        cudaStreamCreate(&stream);
+    }
+    for(int s_idx_curr=0; s_idx_curr<host_opt.S_SZ; ++s_idx_curr) {
+        for(int v_idx_curr=0; v_idx_curr<host_opt.V_SZ; ++v_idx_curr) {
+            size_t stream_idx = (s_idx_curr*host_opt.V_SZ+ v_idx_curr) % streams.size();
+            best_cost_for_state<<<num_blocks,num_threads,shared_mem_size,streams.at(stream_idx)>>>(s_idx_curr,v_idx_curr,
+                                                                                                   dev_tmp_arr,dev_c2g,dev_opt_ptr);
+        }
+    }
+    auto done = std::chrono::high_resolution_clock::now();
+    std::cout << "Total time for loops... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+    //10 streams -> 384
+    //20 streams -> 355,340
+    //100 streams -> 182,186,184,186
+    //200 streams -> 190
     //cleanup
 
     cudaEventRecord(start);
