@@ -5,7 +5,7 @@
 #include <vector>
 #include <chrono>
 #include <iostream>
-#include "prob_utils.h"
+#include "dp_utils.h"
 
 int speed_dp_serial(std::vector<float> const & a_options,
                      std::vector<float> const & v_options,
@@ -139,20 +139,14 @@ int speed_dp_serial(std::vector<float> const & a_options,
 
 
 extern
-int speed_dp_naive(std::vector<float> const & a_options,
-             std::vector<float> const & v_options,
-             std::vector<float> const & s_options,
-             int n_times,
-             int initial_v_idx);
-
-extern
 int speed_dp(std::vector<float> const & a_options,
              std::vector<float> const & v_options,
              std::vector<float> const & s_options,
              int n_times,
              int initial_v_idx,
              bool print);
-
+extern
+int init_card(int argc, char const **argv);
 
 int main(int argc, char **argv)
 {
@@ -168,13 +162,14 @@ int main(int argc, char **argv)
     auto done_cpu = std::chrono::high_resolution_clock::now();
     std::cout << "Total time for search on CPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_cpu-started_cpu).count()/1000.0 << " ms " << std::endl;
 
+    init_card(argc,(char const **)argv);
 
     //First run, needs to compile to executable code on the gpu...
     for(int num_tries=0; num_tries<2; ++num_tries) {
         auto started_gpu = std::chrono::high_resolution_clock::now();
-        speed_dp(a_options,v_options,s_options,n_times,initial_v_idx,num_tries>0);
+        speed_dp(a_options,v_options,s_options,n_times,initial_v_idx,num_tries>-1);
         auto done_gpu = std::chrono::high_resolution_clock::now();
-        if(num_tries>0)
+        if(num_tries>-1)
             std::cout << "Total time for search on GPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_gpu-started_gpu).count()/1000.0 << " ms " << std::endl;
     }
 

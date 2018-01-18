@@ -11,10 +11,21 @@ find_package(CUDA)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -O3" ) #It seems thse are passed to nvcc also...
 
 # Pass options to NVCC
+#-gencode arch=compute_20,code=sm_20 -gencode arch=compute_30,code=sm_30
+
+#GeForce GTX 970 compute capability:	5.2
+#-arch=sm_35 --ptxas-options=-v
 set(
     CUDA_NVCC_FLAGS
-    ${CUDA_NVCC_FLAGS};
-    -arch=sm_35 --ptxas-options=-v
+    ${CUDA_NVCC_FLAGS};        
+    -arch=sm_30
+     #-gencode=arch=compute_20,code=sm_20
+     -gencode=arch=compute_30,code=sm_30
+     -gencode=arch=compute_50,code=sm_50
+     -gencode=arch=compute_52,code=sm_52
+     -gencode=arch=compute_60,code=sm_60
+     -gencode=arch=compute_61,code=sm_61
+     -gencode=arch=compute_61,code=compute_61
     )
 
 #Not needed for nvcc...
@@ -32,7 +43,7 @@ target_link_libraries(simple_main simple)
 cuda_add_library(cu_dp_cost2go cu_dp_cost2go.cu SHARED)
 target_link_libraries(cu_dp_cost2go ${CUDA_LIBRARIES})
 
-cuda_add_library(cu_speed_cost2go cu_speed_cost2go.cu  prob_utils.h SHARED)
+cuda_add_library(cu_speed_cost2go cu_speed_cost2go.cu  dp_utils.h SHARED)
 target_link_libraries(cu_speed_cost2go ${CUDA_LIBRARIES})
 
 add_executable(run_dp_cost2go run_dp_cost2go.cpp)

@@ -10,7 +10,7 @@
 #include <chrono>
 
 #include "helper_cuda.h"
-#include "prob_utils.h"
+#include "dp_utils.h"
 
 /*
  * We need to exploit the problem structure to make it fast!
@@ -22,14 +22,7 @@
  *
  */
 
-struct move_options {
-    float * a_opt;
-    float * v_opt;
-    float * s_opt;
-    int A_SZ;
-    int V_SZ;
-    int S_SZ;
-};
+
 
 float const COST_INFEASIBLE = 999999.9f;
 
@@ -145,6 +138,12 @@ __global__ void make_move(float * const c2g,
 }
 
 extern
+int init_card(int argc, char const **argv) {
+    //inline int findCudaDevice(int argc, const char **argv)
+    return findCudaDevice(argc, argv);
+}
+
+extern
 int speed_dp(std::vector<float> const & a_options,
              std::vector<float> const & v_options,
              std::vector<float> const & s_options,
@@ -179,6 +178,12 @@ int speed_dp(std::vector<float> const & a_options,
     float * dev_a_opt;
     float * dev_v_opt;
     float * dev_s_opt;
+
+
+    //memory allocation really only has to happen once, then we can re-run over and over
+    //as long as we re-set the memory....
+    //What's so strange is that we don't get any cost for this the second time...
+    //even though we delete and do Malloc again...
 
     //t x v x s
     int sz = n_times*v_options.size()*s_options.size();
