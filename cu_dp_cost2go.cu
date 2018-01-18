@@ -116,7 +116,7 @@ __global__ void reset_tmp_arr(float * const tmp_arr,
 
 //Working with huge tmp array is too SLOW!
 //Need to use __shared__ memory for the blocks or something...
-__global__ void make_move(float * const tmp_arr,
+__global__ void make_move_naive(float * const tmp_arr,
                           float const * const c2g_arr,
                           move_options const * const move_opt) {
 
@@ -417,7 +417,7 @@ int simple_dp(std::vector<float> const & a_options,
     dim3 block_dim_search(block_d0_sz,block_d1_sz,block_d2_sz);
 
     cudaEventRecord(start);
-    make_move<<<grid_dim_search,block_dim_search>>>(dev_tmp_arr,
+    make_move_naive<<<grid_dim_search,block_dim_search>>>(dev_tmp_arr,
                                                     dev_c2g,
                                                     dev_opt_ptr);
     getLastCudaError("make_move execution failed\n");
