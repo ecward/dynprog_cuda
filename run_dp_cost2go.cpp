@@ -5,7 +5,7 @@
 #include <vector>
 #include <chrono>
 #include <iostream>
-
+#include "prob_utils.h"
 
 int speed_dp_serial(std::vector<float> const & a_options,
                      std::vector<float> const & v_options,
@@ -83,6 +83,15 @@ int speed_dp_serial(std::vector<float> const & a_options,
                         float v_cost     = 0.2*(v_end-10.0)*(v_end-10.0);
                         float delta_cost = acc_cost + v_cost;
 
+                        //Cost for being close to a Normally distriubted obstacle
+                        // @ s=40,sigma=2.0
+                        float const d_mean   = s_end-40.0f;
+                        float const d_sigma  = 2.0f;
+                        // cost ~ how much probabily mass is within 2.0 from 0.0
+                        // int_{-inf}^2 - inf_{-inf}^-2
+                        delta_cost += call_norm_cdf((2.0f-d_mean)/d_sigma) - call_norm_cdf((-2.0f-d_mean)/d_sigma);
+
+
                         //Hard coded obstacle... (at t=3, s=[20,30] is in collision)
                         if(t_idx == 3 && s_end >= 20.0 && s_end <= 30.0) {
                             delta_cost = COST_INFEASIBLE;
@@ -91,25 +100,6 @@ int speed_dp_serial(std::vector<float> const & a_options,
                         //c2g (t,s,v)
                         int c2g_idx_curr  = (t_idx  )*(S_SZ*V_SZ) + s_idx*V_SZ + v_idx;
                         int c2g_idx_start = (t_idx-1)*(S_SZ*V_SZ) + s_start_idx*V_SZ + v_start_idx;
-
-//                        if(t_idx == 2 && v_idx==4 && s_idx==8 &&
-//                                fabs(s_start-1.25)<1.0e-10 && fabs(v_start-2.5)<1.0e-10) {
-//                            //printf("CURR: v_idx = %d, t = %d, c2g = %f\n",v_idx,t_idx,c2g[c2g_idx_curr]);
-//                            printf("CURR: a = %f, PREV: v_idx = %d, t = %d, c2g = %f, delta_c+c2g_curr = %f + %f = %f\n",
-//                                   a_options[a_idx],v_start_idx,t_idx-1,c2g[c2g_idx_start],delta_cost,c2g[c2g_idx_curr],delta_cost + c2g[c2g_idx_curr]);
-//                            printf("delta_cost = acc_cost + v_cost = %f + %f = %f\n",acc_cost,v_cost,delta_cost);
-//                            printf("setting from @ %d to s_idx = %d, v_idx = %d, idx = %d and cost = %f\n",c2g_idx_start,s_idx,v_idx,s_idx*V_SZ + v_idx,delta_cost + c2g[c2g_idx_curr]);
-//                        }
-
-//                        if(t_idx == 1 && v_idx==2 && s_idx==2 &&
-//                                fabs(s_start-0.0)<1.0e-10 && fabs(v_start-0.0)<1.0e-10) {
-//                            std::cout << "idx_curr = " << c2g_idx_curr << " idx_start = " << c2g_idx_start << std::endl;
-//                            //printf("CURR: v_idx = %d, t = %d, c2g = %f\n",v_idx,t_idx,c2g[c2g_idx_curr]);
-//                            printf("CURR: a = %f, PREV: v_idx = %d, t = %d, c2g = %f, delta_c+c2g_curr = %f + %f = %f\n",
-//                                   a_options[a_idx],v_start_idx,t_idx-1,c2g[c2g_idx_start],delta_cost,c2g[c2g_idx_curr],delta_cost + c2g[c2g_idx_curr]);
-//                            printf("delta_cost = acc_cost + v_cost = %f + %f = %f\n",acc_cost,v_cost,delta_cost);
-//                            printf("setting from @ %d to s_idx = %d, v_idx = %d, idx = %d and cost = %f\n",c2g_idx_start,s_idx,v_idx,s_idx*V_SZ + v_idx,delta_cost + c2g[c2g_idx_curr]);
-//                        }
 
                         if(delta_cost + c2g[c2g_idx_curr] < c2g[c2g_idx_start]) {
                             c2g[c2g_idx_start]  = delta_cost + c2g[c2g_idx_curr];
@@ -122,7 +112,7 @@ int speed_dp_serial(std::vector<float> const & a_options,
     }
 
     //backtrack
-    auto started = std::chrono::high_resolution_clock::now();
+    //auto started = std::chrono::high_resolution_clock::now();
 
     float cost = c2g[0*(S_SZ*V_SZ) + 0*V_SZ + initial_v_idx];
     std::cout << "Optimal cost = " << cost << std::endl;
@@ -139,8 +129,8 @@ int speed_dp_serial(std::vector<float> const & a_options,
     }
     std::cout << std::endl;
 
-    auto done = std::chrono::high_resolution_clock::now();
-    std::cout << "Backtrack time = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+    //auto done = std::chrono::high_resolution_clock::now();
+    //std::cout << "Backtrack time = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
 
     delete[] from;
     delete[] c2g;
@@ -176,14 +166,8 @@ int main(int argc, char **argv)
     auto started_cpu = std::chrono::high_resolution_clock::now();
     speed_dp_serial(a_options,v_options,s_options,n_times,initial_v_idx);
     auto done_cpu = std::chrono::high_resolution_clock::now();
-    std::cout << "Total time for search on CPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done_cpu-started_cpu).count() << " ms " << std::endl;
+    std::cout << "Total time for search on CPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_cpu-started_cpu).count()/1000.0 << " ms " << std::endl;
 
-//    for(int num_tries=0; num_tries<10; ++num_tries) {
-//        auto started = std::chrono::high_resolution_clock::now();
-//        speed_dp_naive(a_options,v_options,s_options,n_times,initial_v_idx);
-//        auto done = std::chrono::high_resolution_clock::now();
-//        std::cout << "Total time for search on GPU naive... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
-//    }
 
     //First run, needs to compile to executable code on the gpu...
     for(int num_tries=0; num_tries<2; ++num_tries) {
@@ -191,7 +175,7 @@ int main(int argc, char **argv)
         speed_dp(a_options,v_options,s_options,n_times,initial_v_idx,num_tries>0);
         auto done_gpu = std::chrono::high_resolution_clock::now();
         if(num_tries>0)
-            std::cout << "Total time for search on GPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done_gpu-started_gpu).count() << " ms " << std::endl;
+            std::cout << "Total time for search on GPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_gpu-started_gpu).count()/1000.0 << " ms " << std::endl;
     }
 
     return 0;

@@ -32,7 +32,7 @@ target_link_libraries(simple_main simple)
 cuda_add_library(cu_dp_cost2go cu_dp_cost2go.cu SHARED)
 target_link_libraries(cu_dp_cost2go ${CUDA_LIBRARIES})
 
-cuda_add_library(cu_speed_cost2go cu_speed_cost2go.cu SHARED)
+cuda_add_library(cu_speed_cost2go cu_speed_cost2go.cu  prob_utils.h SHARED)
 target_link_libraries(cu_speed_cost2go ${CUDA_LIBRARIES})
 
 add_executable(run_dp_cost2go run_dp_cost2go.cpp)
