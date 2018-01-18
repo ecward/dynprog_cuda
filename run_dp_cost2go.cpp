@@ -160,7 +160,8 @@ int speed_dp(std::vector<float> const & a_options,
              std::vector<float> const & v_options,
              std::vector<float> const & s_options,
              int n_times,
-             int initial_v_idx);
+             int initial_v_idx,
+             bool print);
 
 
 int main(int argc, char **argv)
@@ -172,20 +173,26 @@ int main(int argc, char **argv)
     int initial_v_idx = 10; //12.5 m/s
     int n_times = 10;
 
-    auto started = std::chrono::high_resolution_clock::now();
+    auto started_cpu = std::chrono::high_resolution_clock::now();
     speed_dp_serial(a_options,v_options,s_options,n_times,initial_v_idx);
-    auto done = std::chrono::high_resolution_clock::now();
-    std::cout << "Total time for search on CPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+    auto done_cpu = std::chrono::high_resolution_clock::now();
+    std::cout << "Total time for search on CPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done_cpu-started_cpu).count() << " ms " << std::endl;
 
-    started = std::chrono::high_resolution_clock::now();
-    speed_dp_naive(a_options,v_options,s_options,n_times,initial_v_idx);
-    done = std::chrono::high_resolution_clock::now();
-    std::cout << "Total time for search on GPU naive... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+//    for(int num_tries=0; num_tries<10; ++num_tries) {
+//        auto started = std::chrono::high_resolution_clock::now();
+//        speed_dp_naive(a_options,v_options,s_options,n_times,initial_v_idx);
+//        auto done = std::chrono::high_resolution_clock::now();
+//        std::cout << "Total time for search on GPU naive... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+//    }
 
-    started = std::chrono::high_resolution_clock::now();
-    speed_dp(a_options,v_options,s_options,n_times,initial_v_idx);
-    done = std::chrono::high_resolution_clock::now();
-    std::cout << "Total time for search on GPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+    //First run, needs to compile to executable code on the gpu...
+    for(int num_tries=0; num_tries<2; ++num_tries) {
+        auto started_gpu = std::chrono::high_resolution_clock::now();
+        speed_dp(a_options,v_options,s_options,n_times,initial_v_idx,num_tries>0);
+        auto done_gpu = std::chrono::high_resolution_clock::now();
+        if(num_tries>0)
+            std::cout << "Total time for search on GPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done_gpu-started_gpu).count() << " ms " << std::endl;
+    }
 
     return 0;
 }

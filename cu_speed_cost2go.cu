@@ -127,7 +127,8 @@ int speed_dp(std::vector<float> const & a_options,
              std::vector<float> const & v_options,
              std::vector<float> const & s_options,
              int n_times,
-             int initial_v_idx) {
+             int initial_v_idx,
+             bool print) {
 
     if(s_options.size() > 1024 || a_options.size() > 1024) {
         std::cerr << "Maximum dimensions exceeded" << std::endl;
@@ -141,13 +142,13 @@ int speed_dp(std::vector<float> const & a_options,
 
 
     // initialise CUDA timing
-    float milli;
-    cudaEvent_t start, stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
+//    float milli;
+//    cudaEvent_t start, stop;
+//    cudaEventCreate(&start);
+//    cudaEventCreate(&stop);
 
 
-    cudaEventRecord(start);
+//    cudaEventRecord(start);
 
     ///@todo c2g doesn't need to include more than two timesteps, and we can swap buffers
     //allocate and set data
@@ -194,10 +195,10 @@ int speed_dp(std::vector<float> const & a_options,
     //copy data to device
     checkCudaErrors( cudaMemcpy(dev_opt_ptr,&host_opt,sizeof(move_options),cudaMemcpyHostToDevice) );
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milli, start, stop);
-    std::cout << "Device memory allocation in " << milli << " ms " << std::endl;
+//    cudaEventRecord(stop);
+//    cudaEventSynchronize(stop);
+//    cudaEventElapsedTime(&milli, start, stop);
+//    std::cout << "Device memory allocation in " << milli << " ms " << std::endl;
 
 
     ///@todo this can probably be done better...
@@ -212,7 +213,7 @@ int speed_dp(std::vector<float> const & a_options,
     }
 
     //Backtrack
-    auto started = std::chrono::high_resolution_clock::now();
+    //auto started = std::chrono::high_resolution_clock::now();
     float * host_c2g  = new float[sz];
     int   * host_from = new int[sz];
 
@@ -224,33 +225,33 @@ int speed_dp(std::vector<float> const & a_options,
     //find the state starts at initial_v_idx
 
     //c2g/from (t,s,v)
+
     int c2g_idx = get_c2g_idx(0,0,initial_v_idx,&host_opt);
     float cost = host_c2g[c2g_idx];
-    std::cout << "Optimal cost = " << cost << std::endl;
-
-    std::cout << "optimal speed prof: ";
-    std::cout << "(" << s_options[0] << ", " << v_options[initial_v_idx] << "); ";
+    if(print) std::cout << "Optimal cost = " << cost << std::endl;
+    if(print) std::cout << "optimal speed prof: ";
+    if(print) std::cout << "(" << s_options[0] << ", " << v_options[initial_v_idx] << "); ";
     int idx_nxt = host_from[c2g_idx];
     //std::cout << "idx_nxt = " << idx_nxt << " ";
     for(int t_idx=1; t_idx<n_times; ++t_idx) {
         //unwind index
         int s_idx = idx_nxt/host_opt.V_SZ;
         int v_idx = idx_nxt-(s_idx*host_opt.V_SZ);
-        std::cout << "(" << s_options[s_idx] << ", " << v_options[v_idx] << "); ";
+        if(print) std::cout << "(" << s_options[s_idx] << ", " << v_options[v_idx] << "); ";
         c2g_idx   = get_c2g_idx(t_idx,s_idx,v_idx,&host_opt);
         idx_nxt   = host_from[c2g_idx];
         //std::cout << "idx_nxt = " << idx_nxt << " ";
     }
-    std::cout << std::endl;
+    if(print) std::cout << std::endl;
 
     //cleanup
     delete[] host_c2g;
     delete[] host_from;
 
-    auto done = std::chrono::high_resolution_clock::now();
-    std::cout << "Backtrack time = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+    //auto done = std::chrono::high_resolution_clock::now();
+    //std::cout << "Backtrack time = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
 
-    cudaEventRecord(start);
+//    cudaEventRecord(start);
 
     checkCudaErrors( cudaFree(dev_opt_ptr));
     checkCudaErrors( cudaFree(dev_s_opt));
@@ -259,10 +260,10 @@ int speed_dp(std::vector<float> const & a_options,
     checkCudaErrors( cudaFree(dev_from));
     checkCudaErrors( cudaFree(dev_c2g));
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&milli, start, stop);
-    std::cout << "Cleanup device memory in " << milli << " ms " << std::endl;
+//    cudaEventRecord(stop);
+//    cudaEventSynchronize(stop);
+//    cudaEventElapsedTime(&milli, start, stop);
+//    std::cout << "Cleanup device memory in " << milli << " ms " << std::endl;
 
     //for printing
     //cudaDeviceReset();
