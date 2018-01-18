@@ -143,8 +143,69 @@ int init_card(int argc, char const **argv) {
     return findCudaDevice(argc, argv);
 }
 
+
+extern prob_mem setup_memory(std::vector<float> const & a_options,
+                             std::vector<float> const & v_options,
+                             std::vector<float> const & s_options,
+                             int n_times)
+{
+    ///@todo c2g doesn't need to include more than two timesteps, and we can swap buffers
+    //allocate and set data
+
+    prob_mem p_mem;
+
+    //memory allocation really only has to happen once, then we can re-run over and over
+    //as long as we re-set the memory....
+    //What's so strange is that we don't get any cost for this the second time...
+    //even though we delete and do Malloc again...
+
+    //t x v x s
+    int sz = n_times*v_options.size()*s_options.size();
+    checkCudaErrors( cudaMalloc((void **)&p_mem.dev_c2g,sz*sizeof(float)) );
+    checkCudaErrors( cudaMalloc((void **)&p_mem.dev_from,sz*sizeof(int)) );
+
+    checkCudaErrors( cudaMalloc((void **)&p_mem.dev_a_opt,(a_options.size())*sizeof(float)) );
+    checkCudaErrors( cudaMemcpy(p_mem.dev_a_opt,a_options.data(),a_options.size()*sizeof(float),cudaMemcpyHostToDevice) );
+
+    checkCudaErrors( cudaMalloc((void **)&p_mem.dev_v_opt,(v_options.size())*sizeof(float)) );
+    checkCudaErrors( cudaMemcpy(p_mem.dev_v_opt,v_options.data(),v_options.size()*sizeof(float),cudaMemcpyHostToDevice) );
+
+    checkCudaErrors( cudaMalloc((void **)&p_mem.dev_s_opt,(s_options.size())*sizeof(float)) );
+    checkCudaErrors( cudaMemcpy(p_mem.dev_s_opt,s_options.data(),s_options.size()*sizeof(float),cudaMemcpyHostToDevice) );
+
+    //Struct on device
+    move_options   host_opt;
+    move_options * dev_opt_ptr;
+    cudaMalloc((void**)&dev_opt_ptr,sizeof(move_options));
+    //raw ptrs
+    host_opt.a_opt = p_mem.dev_a_opt;
+    host_opt.v_opt = p_mem.dev_v_opt;
+    host_opt.s_opt = p_mem.dev_s_opt;
+    host_opt.A_SZ = a_options.size();
+    host_opt.S_SZ = s_options.size();
+    host_opt.V_SZ = v_options.size();
+    //copy data to device
+    checkCudaErrors( cudaMemcpy(dev_opt_ptr,&host_opt,sizeof(move_options),cudaMemcpyHostToDevice) );
+
+    p_mem.dev_opt_ptr = dev_opt_ptr;
+    p_mem.host_opt    = host_opt;
+    return p_mem;
+
+}
+
+extern void clear_memory(prob_mem & p_mem) {
+    checkCudaErrors( cudaFree(p_mem.dev_opt_ptr));
+    checkCudaErrors( cudaFree(p_mem.dev_s_opt));
+    checkCudaErrors( cudaFree(p_mem.dev_v_opt));
+    checkCudaErrors( cudaFree(p_mem.dev_a_opt));
+    checkCudaErrors( cudaFree(p_mem.dev_from));
+    checkCudaErrors( cudaFree(p_mem.dev_c2g));
+}
+
+
 extern
-int speed_dp(std::vector<float> const & a_options,
+int speed_dp(prob_mem & p_mem,
+             std::vector<float> const & a_options,
              std::vector<float> const & v_options,
              std::vector<float> const & s_options,
              int n_times,
@@ -162,77 +223,21 @@ int speed_dp(std::vector<float> const & a_options,
     }
 
 
-    // initialise CUDA timing
-//    float milli;
-//    cudaEvent_t start, stop;
-//    cudaEventCreate(&start);
-//    cudaEventCreate(&stop);
-
-
-//    cudaEventRecord(start);
-
-    ///@todo c2g doesn't need to include more than two timesteps, and we can swap buffers
-    //allocate and set data
-    float * dev_c2g;   //(t,v,s)
-    int   * dev_from;  //(t,v,s)
-    float * dev_a_opt;
-    float * dev_v_opt;
-    float * dev_s_opt;
-
-
-    //memory allocation really only has to happen once, then we can re-run over and over
-    //as long as we re-set the memory....
-    //What's so strange is that we don't get any cost for this the second time...
-    //even though we delete and do Malloc again...
-
-    //t x v x s
     int sz = n_times*v_options.size()*s_options.size();
-    checkCudaErrors( cudaMalloc((void **)&dev_c2g,sz*sizeof(float)) );
-    checkCudaErrors( cudaMalloc((void **)&dev_from,sz*sizeof(int)) );
 
     //At last time all costs are zero, otherwise, initialize to COST_INFEASIBLE..
-    thrust::device_ptr<float> dev_ptr(dev_c2g);
+    thrust::device_ptr<float> dev_ptr(p_mem.dev_c2g);
     thrust::fill(dev_ptr, dev_ptr + sz, COST_INFEASIBLE);
     thrust::fill(dev_ptr+(n_times-1)*(v_options.size()*s_options.size()),dev_ptr+sz,0.0);
 
-
-
-    checkCudaErrors( cudaMemset(dev_from,-1,sz*sizeof(int)) );
-
-    checkCudaErrors( cudaMalloc((void **)&dev_a_opt,(a_options.size())*sizeof(float)) );
-    checkCudaErrors( cudaMemcpy(dev_a_opt,a_options.data(),a_options.size()*sizeof(float),cudaMemcpyHostToDevice) );
-
-    checkCudaErrors( cudaMalloc((void **)&dev_v_opt,(v_options.size())*sizeof(float)) );
-    checkCudaErrors( cudaMemcpy(dev_v_opt,v_options.data(),v_options.size()*sizeof(float),cudaMemcpyHostToDevice) );
-
-    checkCudaErrors( cudaMalloc((void **)&dev_s_opt,(s_options.size())*sizeof(float)) );
-    checkCudaErrors( cudaMemcpy(dev_s_opt,s_options.data(),s_options.size()*sizeof(float),cudaMemcpyHostToDevice) );
-
-    //Struct on device
-    move_options   host_opt;
-    move_options * dev_opt_ptr;
-    cudaMalloc((void**)&dev_opt_ptr,sizeof(move_options));
-    //raw ptrs
-    host_opt.a_opt = dev_a_opt;
-    host_opt.v_opt = dev_v_opt;
-    host_opt.s_opt = dev_s_opt;
-    host_opt.A_SZ = a_options.size();
-    host_opt.S_SZ = s_options.size();
-    host_opt.V_SZ = v_options.size();
-    //copy data to device
-    checkCudaErrors( cudaMemcpy(dev_opt_ptr,&host_opt,sizeof(move_options),cudaMemcpyHostToDevice) );
-
-//    cudaEventRecord(stop);
-//    cudaEventSynchronize(stop);
-//    cudaEventElapsedTime(&milli, start, stop);
-//    std::cout << "Device memory allocation in " << milli << " ms " << std::endl;
+    checkCudaErrors( cudaMemset(p_mem.dev_from,-1,sz*sizeof(int)) );
 
 
     ///@todo this can probably be done better...
 
     //about 6-8 ms with this
-    dim3 block_dim(host_opt.S_SZ,1);
-    dim3 grid_dim(1,host_opt.A_SZ);
+    dim3 block_dim(p_mem.host_opt.S_SZ,1);
+    dim3 grid_dim(1,p_mem.host_opt.A_SZ);
 
     //Let's try with 512 threads/block instead
     //Pretty much the same...
@@ -246,26 +251,24 @@ int speed_dp(std::vector<float> const & a_options,
 
     //These loops have to be done in sequence
     for(int t_idx=n_times-1; t_idx>0; t_idx--) {
-        for(int v_idx=0; v_idx<host_opt.V_SZ; ++v_idx) {
-            make_move<<<grid_dim,block_dim>>>(dev_c2g,dev_from,v_idx,t_idx,dev_opt_ptr);
+        for(int v_idx=0; v_idx<p_mem.host_opt.V_SZ; ++v_idx) {
+            make_move<<<grid_dim,block_dim>>>(p_mem.dev_c2g,p_mem.dev_from,v_idx,t_idx,p_mem.dev_opt_ptr);
         }
     }
 
     //Backtrack
-    //auto started = std::chrono::high_resolution_clock::now();
     float * host_c2g  = new float[sz];
     int   * host_from = new int[sz];
 
-    cudaMemcpy(host_c2g,dev_c2g,sz*sizeof(float),cudaMemcpyDeviceToHost);
-    cudaMemcpy(host_from,dev_from,sz*sizeof(int),cudaMemcpyDeviceToHost);
+    cudaMemcpy(host_c2g,p_mem.dev_c2g,sz*sizeof(float),cudaMemcpyDeviceToHost);
+    cudaMemcpy(host_from,p_mem.dev_from,sz*sizeof(int),cudaMemcpyDeviceToHost);
 
 
     //by definition we start at s=0
     //find the state starts at initial_v_idx
 
     //c2g/from (t,s,v)
-
-    int c2g_idx = get_c2g_idx(0,0,initial_v_idx,&host_opt);
+    int c2g_idx = get_c2g_idx(0,0,initial_v_idx,&p_mem.host_opt);
     float cost = host_c2g[c2g_idx];
     if(print) std::cout << "Optimal cost = " << cost << std::endl;
     if(print) std::cout << "optimal speed prof: ";
@@ -274,10 +277,10 @@ int speed_dp(std::vector<float> const & a_options,
     //std::cout << "idx_nxt = " << idx_nxt << " ";
     for(int t_idx=1; t_idx<n_times; ++t_idx) {
         //unwind index
-        int s_idx = idx_nxt/host_opt.V_SZ;
-        int v_idx = idx_nxt-(s_idx*host_opt.V_SZ);
+        int s_idx = idx_nxt/p_mem.host_opt.V_SZ;
+        int v_idx = idx_nxt-(s_idx*p_mem.host_opt.V_SZ);
         if(print) std::cout << "(" << s_options[s_idx] << ", " << v_options[v_idx] << "); ";
-        c2g_idx   = get_c2g_idx(t_idx,s_idx,v_idx,&host_opt);
+        c2g_idx   = get_c2g_idx(t_idx,s_idx,v_idx,&p_mem.host_opt);
         idx_nxt   = host_from[c2g_idx];
         //std::cout << "idx_nxt = " << idx_nxt << " ";
     }
@@ -286,23 +289,6 @@ int speed_dp(std::vector<float> const & a_options,
     //cleanup
     delete[] host_c2g;
     delete[] host_from;
-
-    //auto done = std::chrono::high_resolution_clock::now();
-    //std::cout << "Backtrack time = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
-
-//    cudaEventRecord(start);
-
-    checkCudaErrors( cudaFree(dev_opt_ptr));
-    checkCudaErrors( cudaFree(dev_s_opt));
-    checkCudaErrors( cudaFree(dev_v_opt));
-    checkCudaErrors( cudaFree(dev_a_opt));
-    checkCudaErrors( cudaFree(dev_from));
-    checkCudaErrors( cudaFree(dev_c2g));
-
-//    cudaEventRecord(stop);
-//    cudaEventSynchronize(stop);
-//    cudaEventElapsedTime(&milli, start, stop);
-//    std::cout << "Cleanup device memory in " << milli << " ms " << std::endl;
 
     //for printing
     //cudaDeviceReset();

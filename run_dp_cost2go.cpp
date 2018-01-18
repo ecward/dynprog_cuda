@@ -6,8 +6,31 @@
 #include <chrono>
 #include <iostream>
 #include "dp_utils.h"
+#include <algorithm>
 
-int speed_dp_serial(std::vector<float> const & a_options,
+struct cpu_prob_mem {
+    float * c2g;
+    int *  from;
+    cpu_prob_mem(std::vector<float> const & /*a_options*/,
+                 std::vector<float> const & v_options,
+                 std::vector<float> const & s_options,
+                 int n_times)
+    {
+        size_t V_SZ = v_options.size();
+        size_t S_SZ = s_options.size();
+        size_t sz = n_times*V_SZ*S_SZ;
+        c2g = new float[sz];
+        from = new int[sz];
+    }
+
+    ~cpu_prob_mem() {
+        delete[] c2g;
+        delete[] from;
+    }
+};
+
+int speed_dp_serial(cpu_prob_mem & p_mem,
+                    std::vector<float> const & a_options,
                      std::vector<float> const & v_options,
                      std::vector<float> const & s_options,
                      int n_times,
@@ -21,25 +44,24 @@ int speed_dp_serial(std::vector<float> const & a_options,
 
     float const COST_INFEASIBLE = 999999.9f;
 
-    //allocate memory
     size_t A_SZ = a_options.size();
     size_t V_SZ = v_options.size();
     size_t S_SZ = s_options.size();
 
-    size_t sz = n_times*V_SZ*S_SZ;
-    float * c2g = new float[sz];
-    int *  from = new int[sz];
+//    size_t sz = n_times*V_SZ*S_SZ;
+//    float * c2g = new float[sz];
+//    int *  from = new int[sz];
 
     //initialize data
     for(int t_idx=0; t_idx<n_times; ++t_idx) {
         for(int s_idx=0; s_idx<S_SZ; ++s_idx) {
             for(int v_idx=0; v_idx<V_SZ; ++v_idx) {
-                from[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = -1;
+                p_mem.from[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = -1;
                 if(t_idx < n_times-1) {
-                    c2g[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = COST_INFEASIBLE;
+                    p_mem.c2g[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = COST_INFEASIBLE;
                 } else {
                     //cost to go from last time is zero
-                    c2g[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = 0.0;
+                    p_mem.c2g[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = 0.0;
                 }
             }
         }
@@ -101,9 +123,9 @@ int speed_dp_serial(std::vector<float> const & a_options,
                         int c2g_idx_curr  = (t_idx  )*(S_SZ*V_SZ) + s_idx*V_SZ + v_idx;
                         int c2g_idx_start = (t_idx-1)*(S_SZ*V_SZ) + s_start_idx*V_SZ + v_start_idx;
 
-                        if(delta_cost + c2g[c2g_idx_curr] < c2g[c2g_idx_start]) {
-                            c2g[c2g_idx_start]  = delta_cost + c2g[c2g_idx_curr];
-                            from[c2g_idx_start] = s_idx*V_SZ + v_idx;
+                        if(delta_cost + p_mem.c2g[c2g_idx_curr] < p_mem.c2g[c2g_idx_start]) {
+                            p_mem.c2g[c2g_idx_start]  = delta_cost + p_mem.c2g[c2g_idx_curr];
+                            p_mem.from[c2g_idx_start] = s_idx*V_SZ + v_idx;
                         }
                     }
                 }
@@ -114,39 +136,45 @@ int speed_dp_serial(std::vector<float> const & a_options,
     //backtrack
     //auto started = std::chrono::high_resolution_clock::now();
 
-    float cost = c2g[0*(S_SZ*V_SZ) + 0*V_SZ + initial_v_idx];
+    float cost = p_mem.c2g[0*(S_SZ*V_SZ) + 0*V_SZ + initial_v_idx];
     std::cout << "Optimal cost = " << cost << std::endl;
 
     std::cout << "optimal speed prof: ";
     std::cout << "(" << s_options[0] << ", " << v_options[initial_v_idx] << "); ";
-    int idx_nxt = from[initial_v_idx];
+    int idx_nxt = p_mem.from[initial_v_idx];
     for(int t_idx=1; t_idx<n_times; ++t_idx) {
         //unwind index
         int s_idx = idx_nxt/V_SZ;
         int v_idx = idx_nxt-(s_idx*V_SZ);
         std::cout << "(" << s_options[s_idx] << ", " << v_options[v_idx] << "); ";
-        idx_nxt   = from[t_idx*(S_SZ*V_SZ) + s_idx*V_SZ + v_idx];
+        idx_nxt   = p_mem.from[t_idx*(S_SZ*V_SZ) + s_idx*V_SZ + v_idx];
     }
     std::cout << std::endl;
 
     //auto done = std::chrono::high_resolution_clock::now();
     //std::cout << "Backtrack time = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
 
-    delete[] from;
-    delete[] c2g;
+//    delete[] from;
+//    delete[] c2g;
     return 0;
 }
 
 
 extern
-int speed_dp(std::vector<float> const & a_options,
+int speed_dp(prob_mem & p_mem,
+             std::vector<float> const & a_options,
              std::vector<float> const & v_options,
              std::vector<float> const & s_options,
              int n_times,
              int initial_v_idx,
              bool print);
-extern
-int init_card(int argc, char const **argv);
+
+extern prob_mem setup_memory(std::vector<float> const & a_options,
+                             std::vector<float> const & v_options,
+                             std::vector<float> const & s_options,
+                             int n_times);
+
+extern void clear_memory(prob_mem & p_mem);
 
 int main(int argc, char **argv)
 {
@@ -158,20 +186,42 @@ int main(int argc, char **argv)
     int n_times = 10;
 
     auto started_cpu = std::chrono::high_resolution_clock::now();
-    speed_dp_serial(a_options,v_options,s_options,n_times,initial_v_idx);
+    cpu_prob_mem cpu_p_mem(a_options,v_options,s_options,n_times);
     auto done_cpu = std::chrono::high_resolution_clock::now();
-    std::cout << "Total time for search on CPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_cpu-started_cpu).count()/1000.0 << " ms " << std::endl;
+    std::cout << "Total time for memory alloc on CPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_cpu-started_cpu).count()/1000.0 << " ms " << std::endl;
 
-    init_card(argc,(char const **)argv);
+    std::vector<double> cpu_runtimes;
+    for(int num_tries=0; num_tries<10; ++num_tries) {
+        auto started_cpu = std::chrono::high_resolution_clock::now();
+        speed_dp_serial(cpu_p_mem,a_options,v_options,s_options,n_times,initial_v_idx);
+        auto done_cpu = std::chrono::high_resolution_clock::now();
+        double rt = std::chrono::duration_cast<std::chrono::microseconds>(done_cpu-started_cpu).count()/1000.0;
+        cpu_runtimes.push_back(rt);
+        std::cout << "Total time for search on CPU... = " << rt << " ms " << std::endl;
+    }
+
+    //setup memory
+    auto started_gpu = std::chrono::high_resolution_clock::now();
+    prob_mem p_mem = setup_memory(a_options,v_options,s_options,n_times);
+    auto done_gpu = std::chrono::high_resolution_clock::now();
+    std::cout << "Total time for memory alloc GPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_gpu-started_gpu).count()/1000.0 << " ms " << std::endl;
 
     //First run, needs to compile to executable code on the gpu...
-    for(int num_tries=0; num_tries<2; ++num_tries) {
+    std::vector<double> gpu_runtimes;
+    for(int num_tries=0; num_tries<10; ++num_tries) {
         auto started_gpu = std::chrono::high_resolution_clock::now();
-        speed_dp(a_options,v_options,s_options,n_times,initial_v_idx,num_tries>-1);
+        speed_dp(p_mem,a_options,v_options,s_options,n_times,initial_v_idx,num_tries>-1);
         auto done_gpu = std::chrono::high_resolution_clock::now();
+        double rt = std::chrono::duration_cast<std::chrono::microseconds>(done_gpu-started_gpu).count()/1000.0;
+        gpu_runtimes.push_back(rt);
         if(num_tries>-1)
-            std::cout << "Total time for search on GPU... = " << std::chrono::duration_cast<std::chrono::microseconds>(done_gpu-started_gpu).count()/1000.0 << " ms " << std::endl;
+            std::cout << "Total time for search on GPU... = " << rt << " ms " << std::endl;
     }
+
+    clear_memory(p_mem);
+
+    std::cout << "MEAN runtime cpu: " << std::accumulate(cpu_runtimes.begin(), cpu_runtimes.end(), 0.0)/10.0 << std::endl;
+    std::cout << "MEAN runtime gpu: " << std::accumulate(gpu_runtimes.begin(), gpu_runtimes.end(), 0.0)/10.0 << std::endl;
 
     return 0;
 }
