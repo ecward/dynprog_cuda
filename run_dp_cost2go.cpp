@@ -6,11 +6,116 @@
 #include <chrono>
 #include <iostream>
 
-//extern
-//int simple_dp(std::vector<float> const & a_options,
-//              std::vector<float> const & v_options,
-//              std::vector<float> const & s_options,
-//              int n_times);
+
+int speed_dp_serial(std::vector<float> const & a_options,
+                     std::vector<float> const & v_options,
+                     std::vector<float> const & s_options,
+                     int n_times,
+                     int initial_v_idx)
+{
+
+    if(initial_v_idx < 0 || initial_v_idx >= v_options.size()) {
+        std::cerr << "Invalid inital speed " << std::endl;
+        return -1;
+    }
+
+    float const COST_INFEASIBLE = 999999.9f;
+
+    //allocate memory
+    size_t A_SZ = a_options.size();
+    size_t V_SZ = v_options.size();
+    size_t S_SZ = s_options.size();
+
+    size_t sz = n_times*V_SZ*S_SZ;
+    float * c2g = new float[sz];
+    int *  from = new int[sz];
+
+    //initialize data
+    for(int t_idx=0; t_idx<n_times; ++t_idx) {
+        for(int s_idx=0; s_idx<S_SZ; ++s_idx) {
+            for(int v_idx=0; v_idx<V_SZ; ++v_idx) {
+                from[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = -1;
+                if(t_idx < n_times-1) {
+                    c2g[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = COST_INFEASIBLE;
+                } else {
+                    //cost to go from last time is zero
+                    c2g[t_idx*S_SZ*V_SZ + s_idx*V_SZ + v_idx] = 0.0;
+                }
+            }
+        }
+    }
+
+    float const delta_s   = s_options[1]-s_options[0];
+    float const delta_v   = v_options[1]-v_options[0];
+
+    for(int t_idx=n_times-1; t_idx>0; t_idx--) {
+        for(int v_idx=0; v_idx<V_SZ; ++v_idx) {
+            for(int s_idx=0; s_idx<S_SZ; ++s_idx) {
+                for(int a_idx=0; a_idx<A_SZ; ++a_idx) {
+                    //move backward in time
+                    float const s_end = s_options[s_idx];
+                    float const v_end = v_options[v_idx];
+
+                    float s_start = s_options[s_idx] - v_options[v_idx] - a_options[a_idx]/2;
+                    float v_start = v_options[v_idx] - a_options[a_idx];
+                    int s_start_idx = s_start/delta_s;
+                    int v_start_idx = v_start/delta_v;
+                    if(v_start_idx < 0 || s_start_idx < 0 ||
+                            v_start_idx >= V_SZ || s_start_idx >= S_SZ) {
+                        //Nop
+                    } else {
+
+                        //check if cost is lower, then update it
+                        float acc_cost   = 0.5*a_options[a_idx]*a_options[a_idx];
+                        //v_cost has to be on end speed!
+                        float v_cost     = 0.2*(v_end-10.0)*(v_end-10.0);
+                        float delta_cost = acc_cost + v_cost;
+
+                        //Hard coded obstacle... (at t=3, s=[20,30] is in collision)
+                        if(t_idx == 3 && s_end >= 20.0 && s_end <= 30.0) {
+                            delta_cost = COST_INFEASIBLE;
+                        }
+
+                        //c2g (t,s,v)
+                        int c2g_idx_curr  = (t_idx  )*(S_SZ*V_SZ) + s_start_idx*V_SZ + v_start_idx;
+                        int c2g_idx_start = (t_idx-1)*(S_SZ*V_SZ) + s_start_idx*V_SZ + v_start_idx;
+
+                        if(delta_cost + c2g[c2g_idx_curr] < c2g[c2g_idx_start]) {
+                            c2g[c2g_idx_start]  = delta_cost + c2g[c2g_idx_curr];
+                            from[c2g_idx_start] = s_idx*V_SZ + v_idx;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    //backtrack
+    auto started = std::chrono::high_resolution_clock::now();
+
+    float cost = c2g[0*(S_SZ*V_SZ) + 0*V_SZ + initial_v_idx];
+    std::cout << "Optimal cost = " << cost << std::endl;
+
+    std::cout << "optimal speed prof: ";
+    std::cout << "(" << s_options[0] << ", " << v_options[initial_v_idx] << "); ";
+    int idx_nxt = from[initial_v_idx];
+    for(int t_idx=1; t_idx<n_times; ++t_idx) {
+        //unwind index
+        int s_idx = idx_nxt/V_SZ;
+        int v_idx = idx_nxt-(s_idx*V_SZ);
+        std::cout << "(" << s_options[s_idx] << ", " << v_options[v_idx] << "); ";
+        idx_nxt   = from[t_idx*(S_SZ*V_SZ) + s_idx*V_SZ + v_idx];
+    }
+    std::cout << std::endl;
+
+    auto done = std::chrono::high_resolution_clock::now();
+    std::cout << "Backtrack time = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+
+    delete[] from;
+    delete[] c2g;
+    return 0;
+}
+
 
 extern
 int speed_dp(std::vector<float> const & a_options,
@@ -28,9 +133,14 @@ int main(int argc, char **argv)
     int initial_v_idx = 4; //3.75 m/s
 
     auto started = std::chrono::high_resolution_clock::now();
-    speed_dp(a_options,v_options,s_options,10,initial_v_idx);
+    speed_dp_serial(a_options,v_options,s_options,10,initial_v_idx);
     auto done = std::chrono::high_resolution_clock::now();
-    std::cout << "Total time for search... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+    std::cout << "Total time for search on CPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
+
+    started = std::chrono::high_resolution_clock::now();
+    speed_dp(a_options,v_options,s_options,10,initial_v_idx);
+    done = std::chrono::high_resolution_clock::now();
+    std::cout << "Total time for search on GPU... = " << std::chrono::duration_cast<std::chrono::milliseconds>(done-started).count() << " ms " << std::endl;
 
     return 0;
 }
